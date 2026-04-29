@@ -1,0 +1,1254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mountain Lion Through the Hills</title>
+<style>
+  body {
+    margin: 0;
+    background: #1a1108;
+    color: #e8d4a0;
+    font-family: 'Courier New', monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    user-select: none;
+  }
+  h1 {
+    margin: 14px 0 4px;
+    font-size: 22px;
+    letter-spacing: 2px;
+    color: #d4a574;
+    text-shadow: 2px 2px 0 #5a3a1a;
+  }
+  #controls {
+    font-size: 12px;
+    margin-bottom: 8px;
+    text-align: center;
+    line-height: 1.7;
+    max-width: 800px;
+  }
+  canvas {
+    background: #d4a574;
+    border: 4px solid #5a3a1a;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+    image-rendering: pixelated;
+    max-width: 100%;
+    display: block;
+  }
+  kbd {
+    background: #5a3a1a;
+    color: #e8d4a0;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    border: 1px solid #8b6f47;
+  }
+</style>
+</head>
+<body>
+<h1>🐾 MOUNTAIN LION THROUGH THE HILLS 🐾</h1>
+<div id="controls">
+  <kbd>← →</kbd> / <kbd>A D</kbd> Move &nbsp;•&nbsp;
+  <kbd>SPACE</kbd> / <kbd>↑</kbd> High Leap &nbsp;•&nbsp;
+  <kbd>SHIFT</kbd> Ambush Pounce &nbsp;•&nbsp;
+  <kbd>Z</kbd> / <kbd>X</kbd> Claw Swipe &nbsp;•&nbsp;
+  <kbd>R</kbd> Restart
+</div>
+<canvas id="game" width="800" height="450"></canvas>
+<script>
+(function() {
+'use strict';
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+// ========= COLORS =========
+const COL = {
+  skyTop:    '#e8a060',
+  skyBot:    '#f4c98a',
+  mountFar:  '#8a6a4a',
+  mountMid:  '#6e5238',
+  hillBack:  '#7a5c3e',
+  hillFront: '#5e4a32',
+  ground:    '#8b6f47',
+  groundTop: '#a08358',
+  rock:      '#5a4a3a',
+  pine:      '#3a5238',
+  pineDark:  '#2a3e2a',
+  lion:      '#c4925f',
+  lionDark:  '#9a6e44',
+  lionLight: '#e8c498',
+  hunter:    '#566838',
+  hunterDk:  '#3e4a26',
+  skin:      '#d4a574',
+  rifle:     '#2a1a10',
+  bear:      '#2a1f18',
+  bearLt:    '#3e2e22',
+  coyote:    '#9a8068',
+  coyoteDk:  '#6a5848',
+  poison:    '#a85a3a',
+  poisonLf:  '#7a3a1a',
+  glint:     '#ffffa0',
+  bullet:    '#2a1a08',
+  flag:      '#c44a2e',
+  flagPole:  '#3a2a1a',
+  hpFull:    '#d44a2e',
+  hpEmpty:   '#3a2a1a',
+  warn:      '#ff4a2a',
+  claw:      '#ffffff',
+};
+
+// ========= INPUT =========
+const keys = {};
+const justPressed = {};
+const blockKeys = ['arrowup','arrowdown','arrowleft','arrowright',' '];
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (!keys[k]) justPressed[k] = true;
+  keys[k] = true;
+  if (blockKeys.includes(k)) e.preventDefault();
+  if (k === 'r') resetGame();
+});
+window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+// ========= AUDIO =========
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch (e) { audioCtx = null; }
+  }
+}
+function sfx(freq, dur, type='square', vol=0.06, slide=0) {
+  ensureAudio();
+  if (!audioCtx) return;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type;
+  o.frequency.value = freq;
+  if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(40, freq + slide), audioCtx.currentTime + dur);
+  g.gain.value = vol;
+  g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start();
+  o.stop(audioCtx.currentTime + dur + 0.02);
+}
+const SFX = {
+  leap:    () => sfx(280, 0.18, 'square', 0.05, 200),
+  pounce:  () => { sfx(140, 0.12, 'sawtooth', 0.07, -60); sfx(220, 0.18, 'square', 0.04, 300); },
+  claw:    () => { sfx(900, 0.06, 'square', 0.04, -400); sfx(1200, 0.05, 'triangle', 0.03, -300); },
+  hit:     () => sfx(90,  0.18, 'sawtooth', 0.08, -40),
+  hurt:    () => sfx(180, 0.25, 'square', 0.06, -120),
+  shoot:   () => sfx(700, 0.06, 'square', 0.03, -300),
+  glint:   () => sfx(1200, 0.08, 'triangle', 0.025),
+  growl:   () => sfx(110, 0.35, 'sawtooth', 0.05, -30),
+  bark:    () => sfx(380, 0.08, 'square', 0.045, -100),
+  win:     () => { sfx(440, 0.15); setTimeout(()=>sfx(660, 0.15), 120); setTimeout(()=>sfx(880, 0.3), 260); },
+};
+
+// ========= GAME STATE =========
+let cam, shake, particles, projectiles, yellMsg, gameWon, gameOver, frame, lastSafe;
+let player, hunters, coyotes, bears, poisonPatches, platforms, flag;
+
+const LEVEL_END = 3200;
+
+function resetGame() {
+  cam = { x: 0, sx: 0 };
+  shake = 0;
+  particles = [];
+  projectiles = [];
+  yellMsg = null;
+  gameWon = false;
+  gameOver = false;
+  frame = 0;
+  lastSafe = { x: 80, y: 300 };
+
+  player = {
+    x: 80, y: 200, w: 44, h: 28,
+    vx: 0, vy: 0,
+    onGround: false, facing: 1,
+    health: 5, maxHealth: 5,
+    pounceCD: 0, pounceActive: 0,
+    clawCD: 0, clawActive: 0,
+    invuln: 0, poisoned: 0,
+    animT: 0,
+  };
+
+  // Platforms (x, y, w, h) — ground sections + floating ledges
+  platforms = [
+    {x: 0,    y: 380, w: 600,  h: 70},
+    {x: 700,  y: 380, w: 380,  h: 70},
+    {x: 1180, y: 380, w: 800,  h: 70},
+    {x: 2080, y: 380, w: 1200, h: 70},
+    // floating
+    {x: 280,  y: 290, w: 110, h: 18},
+    {x: 460,  y: 220, w: 100, h: 18},
+    {x: 770,  y: 290, w: 130, h: 18},
+    {x: 980,  y: 200, w: 110, h: 18},
+    {x: 1340, y: 290, w: 130, h: 18},
+    {x: 1540, y: 210, w: 110, h: 18},
+    {x: 1740, y: 250, w: 120, h: 18},
+    {x: 2150, y: 310, w: 110, h: 18},
+    {x: 2330, y: 250, w: 100, h: 18},
+    {x: 2520, y: 200, w: 100, h: 18},
+    {x: 2720, y: 270, w: 110, h: 18},
+    {x: 2920, y: 220, w: 100, h: 18},
+  ];
+
+  // Reduced enemy count, well-spaced
+  hunters = [
+    {x: 500,  y: 184, w: 26, h: 36, fireT: 130, glint: 0, hp: 1, alive: true},
+    {x: 1580, y: 174, w: 26, h: 36, fireT: 150, glint: 0, hp: 1, alive: true},
+    {x: 2720, y: 234, w: 26, h: 36, fireT: 130, glint: 0, hp: 1, alive: true},
+  ];
+
+  coyotes = [
+    {x: 1320, y: 354, w: 38, h: 26, vx: -2.0, baseVx: -2.0, hp: 1, alive: true,
+     pMin: 1190, pMax: 1450, facing: -1, state: 'patrol', stateT: 0, attackCD: 140},
+    {x: 2200, y: 354, w: 38, h: 26, vx:  2.0, baseVx: 2.0, hp: 1, alive: true,
+     pMin: 2090, pMax: 2350, facing: 1, state: 'patrol', stateT: 0, attackCD: 160},
+  ];
+
+  bears = [
+    {x: 850, y: 338, w: 58, h: 42, vx: 0.55, baseVx: 0.55, hp: 4, alive: true,
+     pMin: 750, pMax: 1080, facing: 1, hitFlash: 0,
+     state: 'patrol', stateT: 0, attackCD: 150},
+  ];
+
+  poisonPatches = [
+    {x: 360,  y: 366, w: 80,  h: 14},
+    {x: 1700, y: 366, w: 90,  h: 14},
+    {x: 2820, y: 366, w: 80,  h: 14},
+  ];
+
+  flag = { x: 3120, y: 300, w: 6, h: 80 };
+
+  showYell("THEY CALL ME MR. MOUNTAIN LION!", "I AM A TRUE BEAST BEAST!", 200);
+}
+
+// ========= HELPERS =========
+function rectOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function showYell(line1, line2, ttl) {
+  yellMsg = { line1, line2, t: 0, ttl };
+}
+
+function spawnParticles(x, y, n, color, speed=3, life=24) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const s = (0.4 + Math.random()) * speed;
+    particles.push({
+      x, y, vx: Math.cos(a)*s, vy: Math.sin(a)*s - 0.5,
+      life, age: 0, color, size: 2 + Math.random()*2,
+    });
+  }
+}
+
+function clawHitbox() {
+  const reach = 32;
+  return {
+    x: player.facing > 0 ? player.x + player.w - 4 : player.x - reach + 4,
+    y: player.y - 2,
+    w: reach,
+    h: player.h + 4,
+  };
+}
+
+// ========= MOVEMENT & COLLISION =========
+function moveX(e, dx) {
+  e.x += dx;
+  for (const p of platforms) {
+    if (rectOverlap(e, p)) {
+      if (dx > 0) e.x = p.x - e.w;
+      else if (dx < 0) e.x = p.x + p.w;
+      e.vx = 0;
+      return true;
+    }
+  }
+  return false;
+}
+function moveY(e, dy) {
+  e.y += dy;
+  let landed = false;
+  for (const p of platforms) {
+    if (rectOverlap(e, p)) {
+      if (dy > 0) { e.y = p.y - e.h; landed = true; }
+      else if (dy < 0) e.y = p.y + p.h;
+      e.vy = 0;
+    }
+  }
+  e.onGround = landed;
+}
+
+// ========= UPDATE =========
+function update() {
+  frame++;
+  if (gameOver || gameWon) {
+    for (const k in justPressed) justPressed[k] = false;
+    return;
+  }
+
+  // ---------- Player input ----------
+  const speed = player.poisoned > 0 ? 1.7 : 3.4;
+  let inputX = 0;
+  if (keys['arrowleft'] || keys['a']) inputX -= 1;
+  if (keys['arrowright'] || keys['d']) inputX += 1;
+
+  if (player.pounceActive > 0) {
+    player.vx = player.facing * 11;
+    player.pounceActive--;
+    if (frame % 2 === 0) spawnParticles(player.x + player.w/2, player.y + player.h/2, 1, COL.lionLight, 2, 12);
+  } else {
+    player.vx = inputX * speed;
+    if (inputX !== 0) player.facing = inputX;
+  }
+
+  // High Leap
+  if ((justPressed[' '] || justPressed['arrowup'] || justPressed['w']) && player.onGround) {
+    player.vy = -13.5;
+    player.onGround = false;
+    SFX.leap();
+    spawnParticles(player.x + player.w/2, player.y + player.h, 5, COL.groundTop, 2, 14);
+  }
+
+  // Ambush Pounce
+  if (justPressed['shift'] && player.pounceCD <= 0 && player.pounceActive <= 0) {
+    player.pounceActive = 14;
+    player.pounceCD = 50;
+    player.vy = Math.min(player.vy, -2);
+    SFX.pounce();
+    shake = 4;
+    spawnParticles(player.x + player.w/2, player.y + player.h/2, 10, COL.lionLight, 4, 18);
+  }
+  if (player.pounceCD > 0) player.pounceCD--;
+
+  // Claw Swipe (NEW)
+  if ((justPressed['z'] || justPressed['x'] || justPressed['c']) && player.clawCD <= 0 && player.clawActive <= 0) {
+    player.clawActive = 10;
+    player.clawCD = 22;
+    SFX.claw();
+    const hb = clawHitbox();
+    spawnParticles(hb.x + hb.w/2, hb.y + hb.h/2, 6, COL.claw, 2.5, 12);
+    // Hit detection (one-time per swipe)
+    for (const h of hunters) {
+      if (h.alive && rectOverlap(hb, h)) {
+        h.alive = false;
+        SFX.hit(); shake = Math.max(shake, 3);
+        spawnParticles(h.x + h.w/2, h.y + h.h/2, 12, COL.hunter, 3, 24);
+      }
+    }
+    for (const c of coyotes) {
+      if (c.alive && rectOverlap(hb, c)) {
+        c.alive = false;
+        SFX.hit(); shake = Math.max(shake, 3);
+        spawnParticles(c.x + c.w/2, c.y + c.h/2, 12, COL.coyote, 3, 22);
+      }
+    }
+    for (const b of bears) {
+      if (b.alive && b.hitFlash === 0 && rectOverlap(hb, b)) {
+        b.hp--;
+        b.hitFlash = 16;
+        SFX.hit(); shake = Math.max(shake, 4);
+        spawnParticles(player.x + (player.facing > 0 ? player.w + 6 : -6), player.y + player.h/2, 8, COL.bearLt, 3, 18);
+        if (b.hp <= 0) {
+          b.alive = false;
+          shake = 9;
+          spawnParticles(b.x + b.w/2, b.y + b.h/2, 22, COL.bear, 4, 30);
+          showYell("ANOTHER ONE DOWN!", "TRUE BEAST BEAST!", 110);
+        }
+      }
+    }
+  }
+  if (player.clawCD > 0) player.clawCD--;
+  if (player.clawActive > 0) player.clawActive--;
+
+  // Gravity
+  player.vy += 0.62;
+  if (player.vy > 16) player.vy = 16;
+
+  moveX(player, player.vx);
+  moveY(player, player.vy);
+
+  if (player.onGround) {
+    if (Math.abs(player.vx) > 0.1) player.animT++;
+    for (const p of platforms) {
+      if (p.w >= 200 && player.y + player.h <= p.y + 2 && player.x + player.w > p.x + 20 && player.x < p.x + p.w - 20) {
+        lastSafe = { x: player.x, y: p.y - 50 };
+        break;
+      }
+    }
+  }
+
+  if (player.invuln > 0) player.invuln--;
+  if (player.poisoned > 0) player.poisoned--;
+
+  // Poison oak
+  for (const p of poisonPatches) {
+    if (rectOverlap(player, p)) player.poisoned = 30;
+  }
+
+  // Fall off world
+  if (player.y > 600) {
+    player.health--;
+    SFX.hurt();
+    shake = 12;
+    if (player.health <= 0) {
+      gameOver = true;
+    } else {
+      player.x = lastSafe.x; player.y = lastSafe.y;
+      player.vx = 0; player.vy = 0;
+      player.invuln = 90;
+    }
+  }
+
+  // ---------- Hunters ----------
+  for (const h of hunters) {
+    if (!h.alive) continue;
+    h.fireT--;
+    if (h.fireT === 32) { h.glint = 32; SFX.glint(); }
+    if (h.glint > 0) h.glint--;
+    if (h.fireT <= 0) {
+      const dx = (player.x + player.w/2) - (h.x + h.w/2);
+      const dir = dx >= 0 ? 1 : -1;
+      projectiles.push({
+        x: h.x + h.w/2 + dir * 12, y: h.y + 10,
+        vx: dir * 4.6, vy: 0,
+        life: 200, owner: 'hunter',
+      });
+      h.fireT = 150 + Math.floor(Math.random()*60);
+      SFX.shoot();
+    }
+    // Pounce kills hunter (claw handled above)
+    if (player.pounceActive > 0 && rectOverlap(player, h)) {
+      h.alive = false;
+      SFX.hit();
+      shake = 6;
+      spawnParticles(h.x + h.w/2, h.y + h.h/2, 14, COL.hunter, 3.5, 26);
+    }
+  }
+
+  // ---------- Coyotes (state machine, telegraphed lunge) ----------
+  for (const c of coyotes) {
+    if (!c.alive) continue;
+    if (c.state === 'patrol') {
+      c.x += c.vx;
+      if (c.x < c.pMin) { c.x = c.pMin; c.vx = Math.abs(c.vx); }
+      if (c.x + c.w > c.pMax) { c.x = c.pMax - c.w; c.vx = -Math.abs(c.vx); }
+      c.facing = c.vx >= 0 ? 1 : -1;
+      c.attackCD--;
+      const dx = (player.x + player.w/2) - (c.x + c.w/2);
+      const dy = Math.abs((player.y + player.h/2) - (c.y + c.h/2));
+      if (c.attackCD <= 0 && Math.abs(dx) < 140 && dy < 50) {
+        c.state = 'telegraph'; c.stateT = 0;
+        c.facing = dx >= 0 ? 1 : -1;
+        c.vx = 0;
+        SFX.bark();
+      }
+    } else if (c.state === 'telegraph') {
+      c.stateT++;
+      if (c.stateT >= 24) { c.state = 'lunge'; c.stateT = 0; }
+    } else if (c.state === 'lunge') {
+      c.stateT++;
+      c.x += c.facing * 6.5;
+      // Damaging body during lunge only
+      if (player.invuln <= 0 && rectOverlap(player, c) && player.pounceActive <= 0) {
+        damagePlayer(c.facing, 1);
+      }
+      if (c.stateT >= 16) { c.state = 'recover'; c.stateT = 0; }
+    } else if (c.state === 'recover') {
+      c.stateT++;
+      if (c.stateT >= 28) {
+        c.state = 'patrol'; c.stateT = 0;
+        c.vx = c.facing * Math.abs(c.baseVx);
+        c.attackCD = 130 + Math.floor(Math.random() * 80);
+        if (c.x < c.pMin) c.x = c.pMin;
+        if (c.x + c.w > c.pMax) c.x = c.pMax - c.w;
+      }
+    }
+    // Player attack vs coyote (pounce — claw handled above)
+    if (player.pounceActive > 0 && rectOverlap(player, c)) {
+      c.alive = false;
+      SFX.hit(); shake = Math.max(shake, 5);
+      spawnParticles(c.x + c.w/2, c.y + c.h/2, 12, COL.coyote, 3, 22);
+    }
+  }
+
+  // ---------- Bears (state machine, telegraphed swipe) ----------
+  for (const b of bears) {
+    if (!b.alive) continue;
+    if (b.hitFlash > 0) b.hitFlash--;
+
+    if (b.state === 'patrol') {
+      b.x += b.vx;
+      if (b.x < b.pMin) { b.x = b.pMin; b.vx = Math.abs(b.vx); }
+      if (b.x + b.w > b.pMax) { b.x = b.pMax - b.w; b.vx = -Math.abs(b.vx); }
+      b.facing = b.vx >= 0 ? 1 : -1;
+      b.attackCD--;
+      const dx = (player.x + player.w/2) - (b.x + b.w/2);
+      const dy = Math.abs((player.y + player.h/2) - (b.y + b.h/2));
+      if (b.attackCD <= 0 && Math.abs(dx) < 90 && dy < 60) {
+        b.state = 'telegraph'; b.stateT = 0;
+        b.facing = dx >= 0 ? 1 : -1;
+        b.vx = 0;
+        SFX.growl();
+      }
+    } else if (b.state === 'telegraph') {
+      b.stateT++;
+      if (b.stateT >= 32) { b.state = 'swipe'; b.stateT = 0; }
+    } else if (b.state === 'swipe') {
+      b.stateT++;
+      // Active swipe hitbox in front
+      const hb = {
+        x: b.facing > 0 ? b.x + b.w - 4 : b.x - 32 + 4,
+        y: b.y + 6,
+        w: 36, h: 38,
+      };
+      if (player.invuln <= 0 && player.pounceActive <= 0 && rectOverlap(player, hb)) {
+        damagePlayer(b.facing, 1);
+      }
+      if (b.stateT >= 14) { b.state = 'recover'; b.stateT = 0; }
+    } else if (b.state === 'recover') {
+      b.stateT++;
+      if (b.stateT >= 36) {
+        b.state = 'patrol'; b.stateT = 0;
+        b.vx = b.facing * Math.abs(b.baseVx);
+        b.attackCD = 140 + Math.floor(Math.random() * 70);
+      }
+    }
+
+    // Player pounce attack on bear
+    if (player.pounceActive > 0 && rectOverlap(player, b) && b.hitFlash === 0) {
+      b.hp--;
+      b.hitFlash = 18;
+      SFX.hit(); shake = 5;
+      spawnParticles(player.x + player.w/2, player.y + player.h/2, 8, COL.bearLt, 3, 18);
+      player.vx = -player.facing * 6;
+      player.pounceActive = 0;
+      if (b.hp <= 0) {
+        b.alive = false;
+        shake = 8;
+        spawnParticles(b.x + b.w/2, b.y + b.h/2, 22, COL.bear, 4, 30);
+        showYell("ANOTHER ONE DOWN!", "TRUE BEAST BEAST!", 110);
+      }
+    }
+  }
+
+  // ---------- Projectiles ----------
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const pr = projectiles[i];
+    pr.x += pr.vx; pr.y += pr.vy;
+    pr.life--;
+    if (player.invuln <= 0 && pr.x > player.x && pr.x < player.x + player.w && pr.y > player.y && pr.y < player.y + player.h) {
+      damagePlayer(pr.vx > 0 ? 1 : -1, 1);
+      projectiles.splice(i, 1);
+      continue;
+    }
+    let hit = false;
+    for (const p of platforms) {
+      if (pr.x >= p.x && pr.x <= p.x + p.w && pr.y >= p.y && pr.y <= p.y + p.h) { hit = true; break; }
+    }
+    if (hit || pr.life <= 0) {
+      spawnParticles(pr.x, pr.y, 4, '#888', 1.5, 10);
+      projectiles.splice(i, 1);
+    }
+  }
+
+  // ---------- Particles ----------
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const pt = particles[i];
+    pt.x += pt.vx; pt.y += pt.vy; pt.vy += 0.18;
+    pt.age++;
+    if (pt.age > pt.life) particles.splice(i, 1);
+  }
+
+  // ---------- Yell ----------
+  if (yellMsg) {
+    yellMsg.t++;
+    if (yellMsg.t > yellMsg.ttl) yellMsg = null;
+  }
+
+  // ---------- Camera ----------
+  const target = Math.max(0, Math.min(LEVEL_END - W, player.x - W/2 + 100));
+  cam.x += (target - cam.x) * 0.1;
+  shake *= 0.85;
+  cam.sx = (Math.random() - 0.5) * shake;
+
+  // ---------- Win ----------
+  if (rectOverlap(player, flag)) {
+    gameWon = true;
+    SFX.win();
+    showYell("THEY CALL ME MR. MOUNTAIN LION!", "I CONQUERED THESE HILLS!", 99999);
+  }
+
+  // Reset just-pressed
+  for (const k in justPressed) justPressed[k] = false;
+}
+
+function damagePlayer(dir, amount=1) {
+  if (player.invuln > 0) return;
+  player.health -= amount;
+  player.invuln = 70;
+  player.vx = dir * 5;
+  player.vy = -6;
+  shake = 8;
+  SFX.hurt();
+  spawnParticles(player.x + player.w/2, player.y + player.h/2, 8, COL.hpFull, 3, 18);
+  if (player.health <= 0) {
+    player.health = 0;
+    gameOver = true;
+  }
+}
+
+// ========= DRAW =========
+function drawBackground() {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, COL.skyTop);
+  g.addColorStop(1, COL.skyBot);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#ffe8a0';
+  ctx.beginPath();
+  ctx.arc(W - 110 - cam.x*0.05, 90, 36, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255, 220, 140, 0.4)';
+  ctx.beginPath();
+  ctx.arc(W - 110 - cam.x*0.05, 90, 56, 0, Math.PI*2);
+  ctx.fill();
+
+  ctx.fillStyle = COL.mountFar;
+  const mfo = -cam.x * 0.15;
+  ctx.beginPath();
+  ctx.moveTo(0, 320);
+  for (let i = 0; i <= 12; i++) {
+    const x = (i * 220 + mfo) % (W + 440) - 220;
+    ctx.lineTo(x + 60,  240);
+    ctx.lineTo(x + 110, 280);
+    ctx.lineTo(x + 180, 220);
+    ctx.lineTo(x + 220, 300);
+  }
+  ctx.lineTo(W, 320); ctx.lineTo(W, H); ctx.lineTo(0, H);
+  ctx.closePath(); ctx.fill();
+
+  ctx.fillStyle = COL.mountMid;
+  const mmo = -cam.x * 0.3;
+  ctx.beginPath();
+  ctx.moveTo(0, 360);
+  for (let i = 0; i <= 14; i++) {
+    const x = (i * 180 + mmo) % (W + 360) - 180;
+    ctx.lineTo(x + 50,  290);
+    ctx.lineTo(x + 90,  320);
+    ctx.lineTo(x + 140, 270);
+    ctx.lineTo(x + 180, 340);
+  }
+  ctx.lineTo(W, 360); ctx.lineTo(W, H); ctx.lineTo(0, H);
+  ctx.closePath(); ctx.fill();
+
+  drawPines(0.5, 360, COL.pineDark, 110);
+  drawPines(0.7, 380, COL.pine, 90);
+}
+
+function drawPines(parallax, baseY, color, spacing) {
+  ctx.fillStyle = color;
+  const off = -cam.x * parallax;
+  for (let i = -2; i < W / spacing + 4; i++) {
+    const x = i * spacing + (off % spacing);
+    const h = 50 + (Math.sin(i * 17.3) * 0.5 + 0.5) * 30;
+    ctx.beginPath();
+    ctx.moveTo(x, baseY);
+    ctx.lineTo(x + 18, baseY - h);
+    ctx.lineTo(x + 36, baseY);
+    ctx.closePath(); ctx.fill();
+    ctx.fillRect(x + 16, baseY, 4, 6);
+  }
+}
+
+function drawPlatforms() {
+  for (const p of platforms) {
+    const x = p.x - cam.x;
+    if (x + p.w < -20 || x > W + 20) continue;
+    ctx.fillStyle = COL.ground;
+    ctx.fillRect(x, p.y, p.w, p.h);
+    ctx.fillStyle = COL.groundTop;
+    ctx.fillRect(x, p.y, p.w, 6);
+    ctx.fillStyle = COL.rock;
+    for (let i = 0; i < p.w; i += 24) {
+      ctx.fillRect(x + i + 4, p.y + 12 + ((i*7)%14), 3, 3);
+      ctx.fillRect(x + i + 14, p.y + 24 + ((i*5)%18), 2, 2);
+    }
+    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+    ctx.fillRect(x, p.y + p.h - 4, p.w, 4);
+  }
+}
+
+function drawPoison() {
+  for (const p of poisonPatches) {
+    const x = p.x - cam.x;
+    if (x + p.w < 0 || x > W) continue;
+    ctx.fillStyle = COL.poisonLf;
+    for (let i = 0; i < p.w; i += 8) {
+      const lx = x + i + 2;
+      const ly = p.y + 4 + Math.sin(frame*0.06 + i) * 1.5;
+      ctx.beginPath();
+      ctx.ellipse(lx, ly, 4, 3, Math.PI/4, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = COL.poison;
+      ctx.beginPath();
+      ctx.ellipse(lx + 4, ly + 2, 4, 3, -Math.PI/4, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = COL.poisonLf;
+    }
+  }
+}
+
+function drawLion() {
+  const p = player;
+  const x = p.x - cam.x, y = p.y;
+  const f = p.facing;
+  ctx.save();
+  if (p.invuln > 0 && Math.floor(p.invuln/4) % 2 === 0) ctx.globalAlpha = 0.45;
+
+  // Pounce trail
+  if (p.pounceActive > 0) {
+    for (let i = 4; i >= 1; i--) {
+      ctx.fillStyle = `rgba(255, 220, 140, ${0.18 * i / 4})`;
+      ctx.beginPath();
+      ctx.ellipse(x + p.w/2 - f * i * 7, y + p.h/2, p.w/2, p.h/2, 0, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  // Tail
+  ctx.strokeStyle = COL.lion;
+  ctx.lineWidth = 5;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  const tx = f > 0 ? x + 4 : x + p.w - 4;
+  const tw = Math.sin(frame * 0.12) * 4;
+  ctx.moveTo(tx, y + p.h - 8);
+  ctx.quadraticCurveTo(tx - f*10, y + p.h - 22 + tw, tx - f*22, y + p.h - 12 + tw);
+  ctx.stroke();
+  ctx.lineWidth = 1;
+
+  // Legs
+  const phase = p.onGround && Math.abs(p.vx) > 0.5 ? Math.sin(p.animT * 0.4) * 4 : 0;
+  ctx.fillStyle = COL.lionDark;
+  ctx.fillRect(x + 6,        y + p.h - 4 - Math.max(0,  phase), 5, 8 + Math.max(0, phase));
+  ctx.fillRect(x + p.w - 11, y + p.h - 4 - Math.max(0, -phase), 5, 8 + Math.max(0, -phase));
+  ctx.fillRect(x + 16,       y + p.h - 4 - Math.max(0, -phase), 5, 8 + Math.max(0, -phase));
+  ctx.fillRect(x + p.w - 22, y + p.h - 4 - Math.max(0,  phase), 5, 8 + Math.max(0, phase));
+
+  // Body
+  ctx.fillStyle = COL.lion;
+  ctx.beginPath();
+  ctx.ellipse(x + p.w/2, y + p.h/2 + 3, p.w/2 - 1, p.h/2 - 1, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = COL.lionLight;
+  ctx.beginPath();
+  ctx.ellipse(x + p.w/2, y + p.h/2 + 8, p.w/2 - 5, p.h/2 - 6, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // Head
+  const hx = f > 0 ? x + p.w - 6 : x + 6;
+  const hy = y + 9;
+  ctx.fillStyle = COL.lion;
+  ctx.beginPath(); ctx.arc(hx, hy, 11, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = COL.lionLight;
+  ctx.beginPath(); ctx.arc(hx + f*6, hy + 3, 5, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#3a1f10';
+  ctx.fillRect(hx + f*9, hy + 2, 3, 2);
+
+  // Ears
+  ctx.fillStyle = COL.lionDark;
+  ctx.beginPath();
+  ctx.moveTo(hx - 8 + (f>0?2:0), hy - 6);
+  ctx.lineTo(hx - 5 + (f>0?2:0), hy - 13);
+  ctx.lineTo(hx - 2 + (f>0?2:0), hy - 6);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(hx + 2 - (f>0?0:2), hy - 6);
+  ctx.lineTo(hx + 5 - (f>0?0:2), hy - 13);
+  ctx.lineTo(hx + 8 - (f>0?0:2), hy - 6);
+  ctx.fill();
+
+  // Eye
+  ctx.fillStyle = '#ffd24a';
+  ctx.fillRect(hx + (f>0 ? 3 : -5), hy - 2, 2, 3);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(hx + (f>0 ? 4 : -4), hy - 1, 1, 2);
+
+  // Whiskers
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(hx + f*6, hy + 4); ctx.lineTo(hx + f*14, hy + 3);
+  ctx.moveTo(hx + f*6, hy + 5); ctx.lineTo(hx + f*14, hy + 6);
+  ctx.stroke();
+
+  ctx.restore();
+
+  // Claw swipe effect (drawn after lion, on top)
+  if (p.clawActive > 0) {
+    drawClawEffect(p);
+  }
+}
+
+function drawClawEffect(p) {
+  const hb = clawHitbox();
+  const x = hb.x - cam.x, y = hb.y;
+  const t = p.clawActive / 10; // 1 -> 0
+  const a = t > 0.7 ? (1 - t) / 0.3 : t / 0.7;
+  ctx.save();
+  ctx.globalAlpha = Math.max(0.2, a);
+  ctx.strokeStyle = COL.claw;
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  // 3 arc slashes
+  for (let i = 0; i < 3; i++) {
+    const cy = y + 6 + i * 10;
+    const startX = p.facing > 0 ? x + 2 : x + hb.w - 2;
+    const endX   = p.facing > 0 ? x + hb.w - 2 : x + 2;
+    ctx.beginPath();
+    ctx.moveTo(startX, cy - 4);
+    ctx.quadraticCurveTo((startX + endX)/2, cy + 8, endX, cy + 4);
+    ctx.stroke();
+  }
+  // bright flash on first frames
+  if (p.clawActive >= 7) {
+    ctx.globalAlpha = (p.clawActive - 6) / 4;
+    ctx.fillStyle = COL.claw;
+    ctx.beginPath();
+    ctx.arc(x + hb.w/2, y + hb.h/2, 14, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawHunter(h) {
+  const x = h.x - cam.x, y = h.y;
+  if (x < -40 || x > W + 40) return;
+  ctx.fillStyle = COL.hunterDk;
+  ctx.fillRect(x + 6,  y + 22, 5, 14);
+  ctx.fillRect(x + 16, y + 22, 5, 14);
+  ctx.fillStyle = COL.hunter;
+  ctx.fillRect(x + 4, y + 8, 18, 18);
+  ctx.fillStyle = COL.hunterDk;
+  ctx.fillRect(x + 6,  y + 10, 4, 4);
+  ctx.fillRect(x + 14, y + 16, 5, 4);
+  ctx.fillRect(x + 8,  y + 20, 4, 3);
+  ctx.fillStyle = COL.skin;
+  ctx.beginPath(); ctx.arc(x + 13, y + 5, 6, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = COL.hunter;
+  ctx.fillRect(x + 7, y - 1, 12, 4);
+  ctx.fillRect(x + 5, y + 2, 16, 2);
+  const dx = (player.x + player.w/2) - (h.x + h.w/2);
+  const dir = dx >= 0 ? 1 : -1;
+  ctx.fillStyle = COL.rifle;
+  if (dir > 0) ctx.fillRect(x + 18, y + 14, 18, 3);
+  else ctx.fillRect(x - 10, y + 14, 18, 3);
+  ctx.fillRect(x + 12, y + 12, 4, 8);
+  if (h.glint > 0) {
+    const a = h.glint / 32;
+    ctx.fillStyle = `rgba(255, 255, 160, ${a})`;
+    const gx = x + (dir > 0 ? 36 : -10);
+    ctx.beginPath();
+    ctx.arc(gx, y + 15, 4 + Math.sin(frame*0.5)*1.5, 0, Math.PI*2);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(255, 255, 200, ${a})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(gx - 6, y + 15); ctx.lineTo(gx + 6, y + 15);
+    ctx.moveTo(gx, y + 9); ctx.lineTo(gx, y + 21);
+    ctx.stroke();
+  }
+}
+
+function drawCoyote(c) {
+  const x = c.x - cam.x, y = c.y;
+  if (x < -60 || x > W + 60) return;
+  const f = c.facing;
+  // Telegraph red glow
+  if (c.state === 'telegraph') {
+    const a = 0.25 + Math.sin(c.stateT * 0.5) * 0.15;
+    ctx.fillStyle = `rgba(255, 60, 30, ${a})`;
+    ctx.beginPath();
+    ctx.ellipse(x + c.w/2, y + c.h/2 + 2, c.w/2 + 8, c.h/2 + 6, 0, 0, Math.PI*2);
+    ctx.fill();
+    // Red exclamation
+    ctx.fillStyle = COL.warn;
+    ctx.font = 'bold 16px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText('!', x + c.w/2, y - 6);
+    ctx.textAlign = 'left';
+  }
+
+  // Body — slightly stretched during lunge, crouched during telegraph
+  let bodyW = c.w, bodyH = c.h;
+  if (c.state === 'telegraph') { bodyH = c.h - 4; }
+  if (c.state === 'lunge') { bodyW = c.w + 6; }
+
+  ctx.fillStyle = COL.coyote;
+  ctx.beginPath();
+  ctx.ellipse(x + c.w/2, y + c.h - bodyH/2, bodyW/2, bodyH/2 - 2, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // Legs
+  ctx.fillStyle = COL.coyoteDk;
+  if (c.state === 'lunge') {
+    // extended legs
+    ctx.fillRect(x + 4,        y + c.h - 2, 5, 6);
+    ctx.fillRect(x + c.w - 9,  y + c.h - 2, 5, 6);
+    ctx.fillRect(x + 14,       y + c.h - 4, 4, 8);
+    ctx.fillRect(x + c.w - 18, y + c.h - 4, 4, 8);
+    // Motion lines
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 2;
+    for (let i = 1; i <= 3; i++) {
+      ctx.beginPath();
+      ctx.moveTo(x - f*i*8, y + c.h/2 + i*3 - 4);
+      ctx.lineTo(x - f*(i*8 + 12), y + c.h/2 + i*3 - 4);
+      ctx.stroke();
+    }
+  } else {
+    const ph = c.state === 'patrol' ? Math.sin(frame * 0.4) * 2 : 0;
+    ctx.fillRect(x + 6,        y + c.h - 2, 4, 6 + ph);
+    ctx.fillRect(x + c.w - 10, y + c.h - 2, 4, 6 - ph);
+    ctx.fillRect(x + 14,       y + c.h - 2, 4, 6 - ph);
+    ctx.fillRect(x + c.w - 18, y + c.h - 2, 4, 6 + ph);
+  }
+
+  // Tail
+  ctx.strokeStyle = COL.coyote;
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  const tx = f > 0 ? x + 2 : x + c.w - 2;
+  ctx.moveTo(tx, y + c.h/2);
+  ctx.lineTo(tx - f*10, y + c.h/2 - 4);
+  ctx.stroke();
+  ctx.lineWidth = 1;
+
+  // Head
+  const hx = f > 0 ? x + c.w - 4 : x + 4;
+  ctx.fillStyle = COL.coyote;
+  ctx.beginPath(); ctx.arc(hx, y + 8, 7, 0, Math.PI*2); ctx.fill();
+  // snout
+  ctx.fillStyle = COL.coyoteDk;
+  if (c.state === 'lunge') {
+    // teeth bared
+    ctx.fillRect(hx + f*4, y + 8, 8, 4);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(hx + f*5, y + 9, 1, 2);
+    ctx.fillRect(hx + f*7, y + 9, 1, 2);
+    ctx.fillRect(hx + f*9, y + 9, 1, 2);
+  } else {
+    ctx.fillRect(hx + f*4, y + 8, 6, 3);
+  }
+  // ears
+  ctx.fillStyle = COL.coyoteDk;
+  ctx.beginPath();
+  ctx.moveTo(hx - 4, y + 4); ctx.lineTo(hx - 2, y - 2); ctx.lineTo(hx, y + 4);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(hx + 1, y + 4); ctx.lineTo(hx + 3, y - 2); ctx.lineTo(hx + 5, y + 4);
+  ctx.fill();
+  // eye
+  ctx.fillStyle = '#ff5a2a';
+  ctx.fillRect(hx + (f>0?1:-3), y + 6, 2, 2);
+}
+
+function drawBear(b) {
+  const x = b.x - cam.x, y = b.y;
+  if (x < -80 || x > W + 80) return;
+  const f = b.facing;
+  const flash = b.hitFlash > 0 && Math.floor(b.hitFlash/3) % 2 === 0;
+
+  // Telegraph glow
+  if (b.state === 'telegraph') {
+    const a = 0.3 + Math.sin(b.stateT * 0.4) * 0.2;
+    ctx.fillStyle = `rgba(255, 60, 30, ${a})`;
+    ctx.beginPath();
+    ctx.ellipse(x + b.w/2, y + b.h/2 + 2, b.w/2 + 10, b.h/2 + 8, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = COL.warn;
+    ctx.font = 'bold 18px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText('!', x + b.w/2, y - 8);
+    ctx.textAlign = 'left';
+  }
+
+  // body
+  ctx.fillStyle = flash ? '#ff8a4a' : COL.bear;
+  ctx.beginPath();
+  ctx.ellipse(x + b.w/2, y + b.h/2 + 2, b.w/2, b.h/2 - 2, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = flash ? '#ffaa6a' : COL.bearLt;
+  ctx.beginPath();
+  ctx.ellipse(x + b.w/2, y + b.h/2 + 8, b.w/2 - 8, b.h/2 - 8, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // legs
+  ctx.fillStyle = flash ? '#ff8a4a' : COL.bear;
+  const ph = b.state === 'patrol' ? Math.sin(frame * 0.15) * 1.5 : 0;
+  ctx.fillRect(x + 6,        y + b.h - 4, 8, 8 + ph);
+  ctx.fillRect(x + b.w - 14, y + b.h - 4, 8, 8 - ph);
+  ctx.fillRect(x + 18,       y + b.h - 4, 8, 8 - ph);
+  ctx.fillRect(x + b.w - 26, y + b.h - 4, 8, 8 + ph);
+
+  // SWIPING PAW
+  if (b.state === 'telegraph' || b.state === 'swipe') {
+    let pawX, pawY, pawW, pawH;
+    if (b.state === 'telegraph') {
+      // raised paw above body
+      const lift = Math.min(12, b.stateT * 0.5);
+      pawX = f > 0 ? x + b.w - 4 : x - 8;
+      pawY = y + 4 - lift;
+      pawW = 14; pawH = 16;
+    } else {
+      // swipe extended
+      const ext = Math.min(28, b.stateT * 3);
+      pawX = f > 0 ? x + b.w - 6 + ext : x + 6 - ext - 14;
+      pawY = y + 12;
+      pawW = 14; pawH = 18;
+    }
+    ctx.fillStyle = flash ? '#ff8a4a' : COL.bear;
+    ctx.fillRect(pawX, pawY, pawW, pawH);
+    // claws
+    ctx.fillStyle = COL.claw;
+    for (let i = 0; i < 3; i++) {
+      const cx = f > 0 ? pawX + pawW : pawX - 3;
+      ctx.fillRect(cx, pawY + 2 + i * 5, 3, 3);
+    }
+    // swipe arc visual
+    if (b.state === 'swipe' && b.stateT < 12) {
+      ctx.strokeStyle = `rgba(255, 255, 255, ${1 - b.stateT/14})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      const arcX = f > 0 ? x + b.w + 4 : x - 4;
+      ctx.arc(arcX, y + 22, 22, f > 0 ? -1.0 : Math.PI + 1.0, f > 0 ? 1.0 : Math.PI - 1.0, f < 0);
+      ctx.stroke();
+    }
+  }
+
+  // head
+  const hx = f > 0 ? x + b.w - 8 : x + 8;
+  ctx.fillStyle = flash ? '#ff8a4a' : COL.bear;
+  ctx.beginPath(); ctx.arc(hx, y + 12, 13, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = flash ? '#ffaa6a' : COL.bearLt;
+  ctx.beginPath(); ctx.arc(hx + f*6, y + 16, 5, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#000';
+  ctx.fillRect(hx + f*9, y + 14, 3, 2);
+  ctx.fillStyle = flash ? '#ff8a4a' : COL.bear;
+  ctx.beginPath(); ctx.arc(hx - 8, y + 4, 4, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(hx + 8, y + 4, 4, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#ff3a1a';
+  ctx.fillRect(hx + (f>0?2:-4), y + 10, 2, 2);
+
+  // HP pips
+  for (let i = 0; i < 4; i++) {
+    ctx.fillStyle = i < b.hp ? '#d44a2e' : 'rgba(0,0,0,0.4)';
+    ctx.fillRect(x + 6 + i*12, y - 8, 8, 4);
+  }
+}
+
+function drawProjectiles() {
+  for (const pr of projectiles) {
+    const x = pr.x - cam.x;
+    if (x < -10 || x > W + 10) continue;
+    ctx.strokeStyle = 'rgba(255, 220, 140, 0.5)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x - pr.vx*2, pr.y - pr.vy*2);
+    ctx.lineTo(x, pr.y);
+    ctx.stroke();
+    ctx.fillStyle = COL.bullet;
+    ctx.beginPath();
+    ctx.arc(x, pr.y, 2.5, 0, Math.PI*2);
+    ctx.fill();
+  }
+}
+
+function drawParticles() {
+  for (const pt of particles) {
+    const a = 1 - pt.age / pt.life;
+    ctx.fillStyle = pt.color;
+    ctx.globalAlpha = a;
+    ctx.fillRect(pt.x - cam.x - pt.size/2, pt.y - pt.size/2, pt.size, pt.size);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawFlag() {
+  const x = flag.x - cam.x;
+  if (x < -30 || x > W + 30) return;
+  ctx.fillStyle = COL.flagPole;
+  ctx.fillRect(x, flag.y, flag.w, flag.h);
+  ctx.fillStyle = COL.flag;
+  ctx.beginPath();
+  ctx.moveTo(x + flag.w, flag.y);
+  ctx.lineTo(x + flag.w + 28 + Math.sin(frame*0.1)*3, flag.y + 6);
+  ctx.lineTo(x + flag.w + 28 + Math.sin(frame*0.1)*3, flag.y + 18);
+  ctx.lineTo(x + flag.w, flag.y + 22);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(x + flag.w + 14, flag.y + 13, 3, 0, Math.PI*2); ctx.fill();
+  ctx.fillRect(x + flag.w + 11, flag.y + 8, 1.5, 2);
+  ctx.fillRect(x + flag.w + 14, flag.y + 7, 1.5, 2);
+  ctx.fillRect(x + flag.w + 17, flag.y + 8, 1.5, 2);
+}
+
+function drawHUD() {
+  // health
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fillRect(12, 12, 20 + player.maxHealth*22, 28);
+  ctx.fillStyle = '#e8d4a0';
+  ctx.font = 'bold 14px Courier New';
+  ctx.fillText('HP', 18, 30);
+  for (let i = 0; i < player.maxHealth; i++) {
+    ctx.fillStyle = i < player.health ? COL.hpFull : COL.hpEmpty;
+    ctx.beginPath();
+    ctx.arc(48 + i*22, 26, 6, 0, Math.PI*2);
+    ctx.fill();
+    if (i < player.health) {
+      ctx.fillStyle = '#ff8a6a';
+      ctx.fillRect(45 + i*22, 21, 2, 2);
+      ctx.fillRect(48 + i*22, 19, 2, 2);
+      ctx.fillRect(51 + i*22, 21, 2, 2);
+    }
+  }
+
+  // pounce CD
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fillRect(12, 48, 142, 22);
+  ctx.fillStyle = '#e8d4a0';
+  ctx.font = 'bold 11px Courier New';
+  ctx.fillText('POUNCE', 18, 64);
+  const pcd = 1 - player.pounceCD / 50;
+  ctx.fillStyle = player.pounceCD > 0 ? '#666' : '#ffc060';
+  ctx.fillRect(82, 54, 64 * pcd, 11);
+  ctx.strokeStyle = '#e8d4a0';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(82, 54, 64, 11);
+
+  // claw CD
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fillRect(12, 74, 142, 22);
+  ctx.fillStyle = '#e8d4a0';
+  ctx.fillText('CLAW', 18, 90);
+  const ccd = 1 - player.clawCD / 22;
+  ctx.fillStyle = player.clawCD > 0 ? '#666' : COL.claw;
+  ctx.fillRect(82, 80, 64 * ccd, 11);
+  ctx.strokeRect(82, 80, 64, 11);
+
+  if (player.poisoned > 0) {
+    ctx.fillStyle = COL.poisonLf;
+    ctx.font = 'bold 12px Courier New';
+    ctx.fillText('POISONED!', 12, 116);
+  }
+
+  // distance
+  const pct = Math.min(100, Math.floor(player.x / LEVEL_END * 100));
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fillRect(W - 142, 12, 130, 22);
+  ctx.fillStyle = '#e8d4a0';
+  ctx.font = 'bold 12px Courier New';
+  ctx.fillText('TRAIL: ' + pct + '%', W - 134, 28);
+  ctx.fillStyle = '#3a2a1a';
+  ctx.fillRect(W - 70, 18, 54, 10);
+  ctx.fillStyle = COL.lion;
+  ctx.fillRect(W - 70, 18, 54 * pct / 100, 10);
+}
+
+function drawYell() {
+  if (!yellMsg) return;
+  const fade = yellMsg.t < 20 ? yellMsg.t / 20 :
+               (yellMsg.ttl - yellMsg.t < 30 ? (yellMsg.ttl - yellMsg.t) / 30 : 1);
+  const a = Math.max(0, Math.min(1, fade));
+  ctx.save();
+  ctx.globalAlpha = a;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(40, 20, 8, 0.78)';
+  ctx.fillRect(0, 110, W, 80);
+  ctx.font = 'bold 22px Courier New';
+  ctx.fillStyle = '#ffd24a';
+  ctx.strokeStyle = '#3a1f08';
+  ctx.lineWidth = 4;
+  ctx.strokeText(yellMsg.line1, W/2, 145);
+  ctx.fillText(yellMsg.line1, W/2, 145);
+  ctx.font = 'bold 24px Courier New';
+  ctx.fillStyle = '#ff7a2a';
+  ctx.strokeText(yellMsg.line2, W/2, 175);
+  ctx.fillText(yellMsg.line2, W/2, 175);
+  ctx.restore();
+}
+
+function drawOverlay() {
+  if (gameOver) {
+    ctx.fillStyle = 'rgba(20, 10, 4, 0.75)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 36px Courier New';
+    ctx.fillStyle = '#ff4a2a';
+    ctx.strokeStyle = '#3a1f08';
+    ctx.lineWidth = 5;
+    ctx.strokeText('THE BEAST FELL...', W/2, H/2 - 16);
+    ctx.fillText('THE BEAST FELL...', W/2, H/2 - 16);
+    ctx.font = 'bold 18px Courier New';
+    ctx.fillStyle = '#e8d4a0';
+    ctx.fillText('Press R to roar back to life', W/2, H/2 + 22);
+    ctx.textAlign = 'left';
+  } else if (gameWon) {
+    ctx.fillStyle = 'rgba(20, 10, 4, 0.65)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 32px Courier New';
+    ctx.fillStyle = '#ffd24a';
+    ctx.strokeStyle = '#3a1f08';
+    ctx.lineWidth = 5;
+    ctx.strokeText('HILLS CONQUERED!', W/2, H/2 - 50);
+    ctx.fillText('HILLS CONQUERED!', W/2, H/2 - 50);
+    ctx.font = 'bold 14px Courier New';
+    ctx.fillStyle = '#e8d4a0';
+    ctx.fillText('Press R to run the trail again', W/2, H/2 + 60);
+    ctx.textAlign = 'left';
+  }
+}
+
+function draw() {
+  ctx.save();
+  ctx.translate(cam.sx, 0);
+  drawBackground();
+  drawPlatforms();
+  drawPoison();
+  drawFlag();
+  for (const h of hunters) if (h.alive) drawHunter(h);
+  for (const c of coyotes) if (c.alive) drawCoyote(c);
+  for (const b of bears) if (b.alive) drawBear(b);
+  drawProjectiles();
+  drawParticles();
+  drawLion();
+  ctx.restore();
+
+  drawHUD();
+  drawYell();
+  drawOverlay();
+}
+
+// ========= MAIN LOOP =========
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+resetGame();
+loop();
+
+})();
+</script>
+</body>
+</html>
